@@ -1,42 +1,31 @@
 import axios, { AxiosResponse } from "axios";
 import notifier from "node-notifier";
 import packageJson from "../package.json";
+import incidents from "./incidents";
+import { Incident } from "./interfaces";
+import { IncidentType } from "./types";
 
 const urlsToCheck: string[] = packageJson.config.urlsToCheck;
-const checkInterval: number = 60 * 1000; // Check every minute
-
-// Define an enum for IncidentType
-enum IncidentType {
-  UP = "UP",
-  DOWN = "DOWN",
-}
-
-interface Incident {
-  type: IncidentType;
-  timestamp: Date;
-  url: string;
-}
-
-let incidents: Incident[] = [];
+const SECOND = 1000;
+const incidentsState = incidents();
+let checkInterval: number = 60 * SECOND; // Check every minute
 
 const checkUrl = async (url: string): Promise<void> => {
+  const currentIncidents: Incident[] = incidentsState.get();
+  const lastIncident: Incident | undefined =
+    currentIncidents.filter((incident) => incident.url === url)[
+      currentIncidents.length - 1
+    ] ?? undefined;
+
   try {
     const response: AxiosResponse = await axios.get(url);
 
     if (response.status === 200) {
+      checkInterval = 60 * SECOND; // Reset check interval to 1 minute
       console.log(`${url} is responding with a 200 status code.`);
-      const previousIncident: Incident | undefined = incidents.find(
-        (incident) => incident.url === url && incident.type === "DOWN"
-      );
 
-      if (previousIncident) {
-        const incident: Incident = {
-          type: IncidentType.UP,
-          timestamp: new Date(),
-          url,
-        };
-        incidents.push(incident);
-        console.log("Incident:", incident);
+      if (lastIncident?.type === IncidentType.DOWN) {
+        incidentsState.addUPIncident(url);
 
         notifier.notify({
           title: "URL Check",
@@ -47,19 +36,10 @@ const checkUrl = async (url: string): Promise<void> => {
       throw new Error(`Non-200 status code: ${response.status}`);
     }
   } catch (error: unknown) {
+    checkInterval = 5 * SECOND; // Check every 5 seconds if there's an error
     if (error instanceof Error) {
-      const previousIncident: Incident | undefined = incidents.find(
-        (incident) => incident.url === url && incident.type === IncidentType.UP
-      );
-
-      if (!previousIncident) {
-        const incident: Incident = {
-          type: IncidentType.DOWN,
-          timestamp: new Date(),
-          url,
-        };
-        incidents.push(incident);
-        console.log("Incident:", incident);
+      if (lastIncident?.type === IncidentType.UP) {
+        incidentsState.addDOWNIncident(url);
 
         notifier.notify({
           title: "URL Check",
@@ -79,7 +59,7 @@ const startCheckingUrls = (): void => {
   });
 };
 
-const getIncidents = (): Incident[] => incidents;
+const getIncidents = (): Incident[] => incidentsState.get();
 
 export = {
   startCheckingUrls,
